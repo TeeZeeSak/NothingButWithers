@@ -24,10 +24,8 @@ public final class WitherConversion {
 	private WitherConversion() {
 	}
 
-	private static final boolean DEBUG = Boolean.getBoolean("nothingbutwithers.debug");
-
 	private static final ResourceKey<LootTable> FALLBACK_WITHER_LOOT =
-			ResourceKey.create(Registries.LOOT_TABLE, Withers.VANILLA_WITHER_LOOT);
+			ResourceKey.create(Registries.LOOT_TABLE, Identifier.withDefaultNamespace("entities/wither"));
 
 	/**
 	 * Entity types that are never converted.
@@ -37,6 +35,9 @@ public final class WitherConversion {
 	 * permanently unfilled. When a cap stays below its limit the natural spawner keeps trying to
 	 * fill it, which becomes an unbounded spawn loop. Leaving these mobs alone keeps their caps
 	 * satisfied by real fish and squid.
+	 *
+	 * <p>The Wither itself is excluded so a player-built Wither is never touched. This is the only
+	 * place that guarantee is enforced.
 	 */
 	private static final Set<EntityType<?>> NEVER_CONVERT = Set.of(
 			EntityTypes.ENDER_DRAGON,
@@ -76,10 +77,14 @@ public final class WitherConversion {
 	 * Replaces {@code mob} with a Wither and returns the new Wither, or {@code null} if the
 	 * replacement was refused.
 	 *
-	 * <p>{@code convertTo} adds the new entity to the level immediately and discards the original,
-	 * but the original is still registered with the entity manager at that moment, so the new Wither
-	 * passes back through {@code ALLOW_LOAD}. The interceptor's re-entrancy guard is what stops the
-	 * Wither from being re-processed there.
+	 * <p>A {@code null} return means <em>the original mob was left untouched</em>, not discarded. The
+	 * caller must therefore leave the original mob in the world rather than refusing it. This matters
+	 * most for the placement check: a zombie spawning inside a cramped structure cannot host a Wither,
+	 * and should simply remain a zombie.
+	 *
+	 * <p>{@code convertTo} adds the new entity to the level immediately and discards the original, so
+	 * the placement check is performed on the entity type's spawn box <em>before</em> converting. Doing
+	 * it afterwards would necessarily discard the original mob, because by then it is already gone.
 	 */
 	public static WitherBoss convert(Mob mob, ModConfig config) {
 		if (!(mob.level() instanceof ServerLevel level)) {
@@ -94,30 +99,36 @@ public final class WitherConversion {
 			return null;
 		}
 
+		// Reject before converting if a Wither would not fit here, so the original mob survives.
+		if (!level.noCollision(mob.getType().getSpawnAABB(mob.getX(), mob.getY(), mob.getZ()))) {
+			debug("{} at {}: no room for a replacement", EntityType.getKey(mob.getType()), pos);
+			return null;
+		}
+
 		Identifier originalId = EntityType.getKey(mob.getType());
+		// Capture the loot table from the live mob. This is authoritative for modded entities, whose
+		// table name is not derivable from the entity id.
+		String lootTable = mob.getLootTable()
+				.map(key -> key.identifier().toString())
+				.orElse(null);
+
 		WitherBoss wither = mob.convertTo(
 				EntityTypes.WITHER,
 				ConversionParams.single(mob, false, true),
 				EntitySpawnReason.CONVERSION,
 				converted -> {
+					if (lootTable != null) {
+						converted.setAttached(ConvertedWitherData.LOOT_TABLE, lootTable);
+					}
 					converted.setAttached(ConvertedWitherData.ORIGINAL_ENTITY, originalId.toString());
-					// Converted Withers must persist: they may not despawn, unlike the Warden they fill in
-					// for at a Sculk Shrieker.
+					// Converted Withers must persist: they may not despawn, unlike the Warden they fill
+					// in for at a Sculk Shrieker.
 					converted.setPersistenceRequired();
 					converted.setHealth(converted.getMaxHealth());
 				});
 
 		if (wither == null || wither.isRemoved()) {
 			debug("{} at {}: convertTo produced no entity", originalId, pos);
-			return null;
-		}
-
-		// Mirror the natural spawner's placement check: reject a Wither that does not actually fit,
-		// which is common inside caves and enclosed structures.
-		if (!level.noCollision(wither,
-				wither.getType().getSpawnAABB(wither.getX(), wither.getY(), wither.getZ()))) {
-			debug("{} at {}: replacement had no room", originalId, pos);
-			wither.discard();
 			return null;
 		}
 
@@ -146,16 +157,15 @@ public final class WitherConversion {
 
 	/** Loot table a converted Wither should roll, falling back to the vanilla Wither table. */
 	public static ResourceKey<LootTable> lootTableFor(WitherBoss wither) {
-		String stored = wither.getAttached(ConvertedWitherData.ORIGINAL_ENTITY);
-		if (stored == null) {
-			return FALLBACK_WITHER_LOOT;
+		String stored = wither.getAttached(ConvertedWitherData.LOOT_TABLE);
+		if (stored != null) {
+			Identifier id = Identifier.tryParse(stored);
+			if (id != null) {
+				return ResourceKey.create(Registries.LOOT_TABLE, id);
+			}
+			NothingButWithers.LOGGER.warn("Wither held an unparseable loot table '{}'", stored);
 		}
-		Identifier entityId = Identifier.tryParse(stored);
-		if (entityId == null) {
-			NothingButWithers.LOGGER.warn("Wither held an unparseable source id '{}'", stored);
-			return FALLBACK_WITHER_LOOT;
-		}
-		return Withers.fromEntityId(entityId);
+		return FALLBACK_WITHER_LOOT;
 	}
 
 	/**
@@ -165,14 +175,14 @@ public final class WitherConversion {
 	 * any other mob, which is what lets the Looting enchantment apply.
 	 */
 	public static void rollSourceLoot(WitherBoss wither, ServerLevel level,
-			net.minecraft.world.damagesource.DamageSource source, boolean hitByPlayer) {
+				net.minecraft.world.damagesource.DamageSource source, boolean hitByPlayer) {
 		ResourceKey<LootTable> table = lootTableFor(wither);
 		debug("rolling {} for converted wither", table.identifier());
 		wither.dropFromLootTable(level, source, hitByPlayer, table);
 	}
 
 	private static void debug(String message, Object... args) {
-		if (DEBUG) {
+		if (Boolean.getBoolean("nothingbutwithers.debug")) {
 			NothingButWithers.LOGGER.info("[debug] " + message, args);
 		}
 	}

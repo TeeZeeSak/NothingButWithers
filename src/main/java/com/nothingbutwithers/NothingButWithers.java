@@ -5,7 +5,6 @@ import com.nothingbutwithers.conversion.ConvertedWitherData;
 import com.nothingbutwithers.spawn.SpawnInterceptor;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,7 +29,6 @@ public class NothingButWithers implements ModInitializer {
 
 		SpawnInterceptor.register();
 
-		ServerTickEvents.END_SERVER_TICK.register(server -> SpawnInterceptor.onTick(server.getTickCount()));
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			ModConfig config = ModConfig.get();

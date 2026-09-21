@@ -19,11 +19,11 @@ no player is online, so entity tick events never fire and spawn conversions sile
 
 ## Layout
 
-- `spawn/SpawnInterceptor` — `ServerEntityEvents.ALLOW_LOAD`; refuses the original mob and converts.
+- `spawn/SpawnInterceptor` — `ServerEntityEvents.ALLOW_LOAD`; refuses the original mob only when a
+  Wither actually replaced it.
 - `conversion/WitherConversion` — eligibility rules, cap checks, `convertTo`, source loot roll.
-- `conversion/WitherRegistry` — per-chunk and global converted-Wither counts.
-- `conversion/ConvertedWitherData` — persisted attachments (`original_entity`).
-- `conversion/Withers` — maps an entity id to its loot table.
+- `conversion/WitherRegistry` — per-level, per-chunk and global converted-Wither counts.
+- `conversion/ConvertedWitherData` — persisted attachments (`loot_table`, `original_entity`).
 - `mixin/` — loot override, boss-bar hiding, terrain-grief clamps.
 - `config/ModConfig` — `config/nothingbutwithers.json`, written with defaults on first run.
 
@@ -46,3 +46,17 @@ with a box that covers a large area. It walks every entity *section coordinate* 
 world-sized box costs tens of milliseconds per call and will hang world generation and the server
 tick. Use the AABB-free overload (`Level#getEntities(EntityTypeTest, Predicate)`), which iterates the
 loaded entities directly.
+
+Converted-Wither caps are hard limits, so the count backing them must not be cached across a spawn
+burst. Multiple attempts in the same tick would all read the same pre-burst value and overshoot.
+`WitherRegistry.invalidate()` is called after every successful conversion for this reason; keep it
+that way.
+
+`suppressNetherStar` and source-loot retention are independent. The Nether Star is spawned in
+`WitherBoss.dropCustomDeathLoot` code, not by its loot table (`minecraft:entities/wither` is empty),
+so cancelling that method is what suppresses the star. Rolling the source table must not be tied to
+that flag, or `false` silently reverts to vanilla Wither drops.
+
+Loot tables are stored on the Wither as a name captured from `Entity#getLootTable`. Do not
+reconstruct them from the entity id as `<namespace>:entities/<path>`; that is only a vanilla
+convention and breaks modded entities.
