@@ -30,9 +30,6 @@ public final class SpawnInterceptor {
 	/** Guards against re-entrancy while the replacement entity is being added. */
 	private static final ThreadLocal<Boolean> CONVERTING = ThreadLocal.withInitial(() -> false);
 
-	/** Set {@code -Dnothingbutwithers.debug=true} to log every intercepted entity load. */
-	private static final boolean DEBUG = Boolean.getBoolean("nothingbutwithers.debug");
-
 	public static void register() {
 		ServerEntityEvents.ALLOW_LOAD.register(SpawnInterceptor::onAllowLoad);
 	}
@@ -49,12 +46,6 @@ public final class SpawnInterceptor {
 		}
 
 		ModConfig config = ModConfig.get();
-		if (DEBUG) {
-			NothingButWithers.LOGGER.info("[debug] load {} reason={} disk={} isMob={} convertible={}",
-					EntityType.getKey(entity.getType()), reason, loadedFromDisk,
-					entity instanceof Mob,
-					entity instanceof Mob probe && WitherConversion.isConvertible(probe, config));
-		}
 		if (!(entity instanceof Mob mob) || !WitherConversion.isConvertible(mob, config)) {
 			return true;
 		}
