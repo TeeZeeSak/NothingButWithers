@@ -10,6 +10,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.world.EntitiesLoadEvent;
+import org.bukkit.event.world.EntitiesUnloadEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 
 /**
@@ -49,6 +50,14 @@ public final class WorldListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntitiesLoad(EntitiesLoadEvent event) {
+        // Keep the loaded counts exact between periodic refreshes. Without this, conversions in
+        // a chunk that loads behind the player would not be visible to the cap until the next
+        // refresh, and the cap could be exceeded.
+        for (org.bukkit.entity.Entity entity : event.getEntities()) {
+            if (entity instanceof Wither wither && plugin.witherIndex().isConverted(wither)) {
+                plugin.witherIndex().noteLoaded(wither);
+            }
+        }
         if (!plugin.settings().scanLoadedChunks) {
             return;
         }
@@ -56,6 +65,22 @@ public final class WorldListener implements Listener {
         if (converted > 0) {
             plugin.getLogger().fine("Converted " + converted + " pre-existing mobs in chunk "
                     + event.getChunk().getX() + "," + event.getChunk().getZ());
+        }
+    }
+
+    /**
+     * Releases tracked Withers that leave the loaded area.
+     *
+     * <p>Critical for the world cap: a Wither that unloads stops ticking and so stops costing
+     * performance, and must give its slot back. If this is missed the cap saturates with
+     * Withers nobody will ever see again and the world stops converting entirely.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onEntitiesUnload(EntitiesUnloadEvent event) {
+        for (org.bukkit.entity.Entity entity : event.getEntities()) {
+            if (entity instanceof Wither && plugin.witherIndex().isConverted((Wither) entity)) {
+                plugin.witherIndex().noteUnloaded(entity);
+            }
         }
     }
 

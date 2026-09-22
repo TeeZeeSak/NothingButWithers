@@ -41,6 +41,7 @@ public final class Settings {
     public final int maxWithersPerWorld;
     public final int maxWithersPerChunk;
     public final double minTpsToConvert;
+    public final int spawnAuditIntervalTicks;
     public final double aiFreezeDistance;
     public final int aiCheckIntervalTicks;
 
@@ -92,6 +93,8 @@ public final class Settings {
         this.maxWithersPerWorld = Math.max(1, c.getInt("performance.max-withers-per-world", 48));
         this.maxWithersPerChunk = Math.max(1, c.getInt("performance.max-withers-per-chunk", 2));
         this.minTpsToConvert = c.getDouble("performance.min-tps-to-convert", 12.0D);
+        this.spawnAuditIntervalTicks =
+                Math.max(0, c.getInt("performance.spawn-audit-interval-ticks", 600));
         this.aiFreezeDistance = c.getDouble("performance.ai-freeze-distance", 48.0D);
         this.aiCheckIntervalTicks = Math.max(1, c.getInt("performance.ai-check-interval-ticks", 40));
 
