@@ -1,0 +1,133 @@
+# MobWithers configuration.
+#
+# Everything here is hot-reloadable with /mobwithers reload.
+
+# Master switch. When false the plugin does nothing at all.
+enabled: true
+
+conversion:
+  # Convert naturally spawning monsters/animals into Withers.
+  natural-mobs: true
+  # Convert mobs produced by a monster spawner, trial spawner or ominous item spawner.
+  spawner-mobs: true
+  # Convert mobs produced by infested blocks (silverfish) and similar block events.
+  block-event-mobs: true
+  # Convert mobs placed into the world by plugins, commands or structure placement.
+  external-mobs: true
+
+  # Never convert these entity types. Names are Bukkit EntityType names.
+  # WITHER and ENDER_DRAGON are always excluded whatever this list says: the first would make
+  # the replacement recursive, the second would make the game impossible to finish.
+  # The list below deliberately contains nothing else, because the point of the plugin is that
+  # every mob becomes a Wither. Re-add types here if a specific mob should be spared, for
+  # example VILLAGER to keep trading working or IRON_GOLEM to let villages defend themselves.
+  excluded-types:
+    - WITHER
+    - ENDER_DRAGON
+
+  # Also leave player-summoned pets alone so the world stays playable.
+  skip-named-mobs: true
+  skip-tamed-mobs: true
+  skip-vehicles: true
+  # Sweep already-loaded chunks on startup so pre-existing mobs are converted too.
+  scan-loaded-chunks: true
+
+  # Used when a mob has no entity loot table of its own (for example the Warden).
+  fallback-loot-table: minecraft:entities/zombie
+
+inheritance:
+  # Copy the source mob's custom name onto the Wither.
+  custom-name: true
+  # Give the Wither the monster spawner's EntityType readout via its persisted data, so
+  # spawner-driven farms and logic still identify the mob they expect.
+  spawner-entity-type: true
+
+water:
+  # CRITICAL CRASH PREVENTION.
+  # Vanilla accounts for water mobs under separate WATER_AMBIENT / WATER_ANIMAL /
+  # WATER_UNDERGROUND_CREATURE / AXOLOTL caps. A converted Wither is not a water mob, so
+  # those caps never fill and the server keeps spawning replacements forever: thousands
+  # of Withers per second, then a hard crash. Zeroing the water caps means the water
+  # categories can never refill, so the loop cannot start.
+  disable-water-mob-spawning: true
+  # Same reasoning for the AMBIENT category (bats).
+  disable-ambient-mob-spawning: true
+  # Re-apply the caps on this interval so gamerules, datapacks or other plugins cannot undo it.
+  enforce-interval-ticks: 600
+
+performance:
+  # Global cap on plugin-spawned Withers per world. Spawns past this are cancelled outright.
+  max-withers-per-world: 48
+  # Per 16x16 chunk column cap.
+  max-withers-per-chunk: 2
+  # Skip conversion entirely while the server TPS is below this value.
+  min-tps-to-convert: 12.0
+  # Withers further than this from every player stop ticking their AI.
+  ai-freeze-distance: 48.0
+  # Paid per-entity results are cheap, but the distance scan is not; check this often.
+  ai-check-interval-ticks: 40
+
+terrain:
+  # Withers destroy terrain; that is the main TPS killer, so blast size is clamped.
+  enabled: true
+  # Stop Withers breaking blocks while the server is below this many TPS.
+  disable-below-tps: 16.0
+  # Hard cap on blocks removed by a single Wither explosion.
+  max-blocks-destroyed-per-explosion: 3
+  protected-blocks:
+    - OBSIDIAN
+    - CRYING_OBSIDIAN
+    - ENCHANTING_TABLE
+    - ANVIL
+    - CHIPPED_ANVIL
+    - DAMAGED_ANVIL
+    - NETHERITE_BLOCK
+    - RESPAWN_ANCHOR
+    - BEACON
+    - END_PORTAL_FRAME
+    - BEDROCK
+    - BARRIER
+    - COMMAND_BLOCK
+    - CHAIN_COMMAND_BLOCK
+    - REPEATING_COMMAND_BLOCK
+    - STRUCTURE_BLOCK
+    - JIGSAW
+    - LIGHT
+
+sculk:
+  # A sculk shrieker activated this many times summons a Horde Wither instead of a Warden.
+  # The summoned Wither is persistent: it will not despawn and will not burrow away.
+  shrieker-activations: 4
+  shrieker-player-radius: 16.0
+  # Block the vanilla Warden spawn so only the Horde Wither can appear.
+  disable-warden-spawn: true
+  # Extra skulls hurled at nearby players on summon.
+  summon-salvo: 1
+
+loot:
+  # Suppress the vanilla Nether Star drop from converted Withers.
+  suppress-nether-star: true
+  # Replace the Wither's flat 50 XP with the source mob's own experience payout.
+  overwrite-wither-experience: true
+  # Use the killer's Looting level when rolling the source mob's loot table.
+  use-looting: true
+  roll-original-loot-table: true
+
+combat:
+  # Vanilla Withers are immune to arrows below 50% health, which is exactly the
+  # "armor phase" behaviour we want. These two values make the phase start consistently.
+  enforce-phase-at-half-health: true
+  # Lead the Wither's movement goal with a slower, telegraphed charge so the player has
+  # an opening. Higher values make the horde more aggressive.
+  combat-speed-multiplier: 1.0
+
+boss-bar:
+  # Every Wither pushes its own vanilla boss bar, which stacks into hundreds of rows of
+  # clutter. Hiding them is done through the packet-level Adventure API.
+  enabled: true
+  interval-ticks: 20
+  title: "&8Horde Withers"
+  # Consolidate every Wither into one aggregate bar instead of hiding the bars entirely.
+  aggregate: true
+  # Only show the aggregate bar when at least this many Withers are loaded nearby.
+  aggregate-minimum: 1
