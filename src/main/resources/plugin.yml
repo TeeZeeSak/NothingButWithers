@@ -1,0 +1,17 @@
+name: MobWithers
+version: ${project.version}
+main: com.mobwithers.MobWithersPlugin
+api-version: '26.3'
+description: ${project.description}
+author: MobWithers
+folia-supported: false
+commands:
+  mobwithers:
+    description: Inspect and control the MobWithers conversion engine.
+    usage: /mobwithers <status|reload|purge|stats>
+    aliases: [mw]
+    permission: mobwithers.admin
+permissions:
+  mobwithers.admin:
+    description: Allows use of the /mobwithers command.
+    default: op
