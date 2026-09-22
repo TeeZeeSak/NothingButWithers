@@ -68,3 +68,25 @@ the engine re-adds every tracked player on each entity update.
 
 `/mobwithers status` reports `1 aggregate bars, 0 visible viewer pairs` at steady state. If
 `visible viewer pairs` climbs, suppression has regressed.
+
+## Cap accounting (a bug worth not reintroducing)
+
+The world cap was originally a running per-world counter, incremented on conversion and
+decremented on death. It leaked: a Wither that left the loaded area was never subtracted, so
+its slot was held for the life of the server. After `max-withers-per-world` such Withers
+accumulated, the cap was permanently saturated and every later spawn in that world was
+refused, no matter how far away. A player who travelled a few hundred blocks from spawn found
+no conversions and no boss bars at all.
+
+The cap exists to bound ticking entities, and only loaded entities tick, so `WitherIndex`
+now counts *loaded* converted Withers. `EntitiesLoadEvent` and `EntitiesUnloadEvent` keep that
+count exact between refreshes; a periodic audit rebuilds it from the worlds and warns if the
+tracked total and the live entities disagree.
+
+Per-chunk capacity is likewise counted from the target chunk's own entities rather than a
+running map, for the same reason.
+
+To check this by hand: set `max-withers-per-world` low, convert that many mobs, unload their
+region with `forceload remove`, then summon another mob somewhere else. It must convert. If
+`refused(world=...)` keeps climbing while `liveWithers=0`, the cap is counting unloaded
+Withers again.

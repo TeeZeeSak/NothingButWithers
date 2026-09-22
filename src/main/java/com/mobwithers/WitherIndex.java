@@ -3,7 +3,6 @@ package com.mobwithers;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.World;
@@ -15,21 +14,42 @@ import org.bukkit.persistence.PersistentDataContainer;
 /**
  * Tracks which Withers this plugin created.
  *
- * <p>A {@code Set<UUID>} lookup would require a full registry sweep on every death, so the
- * authoritative marker is the persisted data on the entity itself (which survives restarts)
- * and this class only keeps an in-memory mirror for fast aggregate counts and the admin
- * command. Entries are dropped when a Wither dies or unloads.
+ * <p>The authoritative marker is the persisted data on the entity itself, which survives
+ * restarts; this class only keeps an in-memory mirror for fast cap checks and the admin
+ * command.
+ *
+ * <h2>Why the cap counts loaded Withers only</h2>
+ *
+ * <p>An earlier version incremented a per-world counter on conversion and decremented it on
+ * death, and treated that counter as the cap. That leaks: any Wither that leaves the loaded
+ * area is never unloaded from the mirror, so its count survives for the life of the server.
+ * Once {@code max-withers-per-world} such Withers accumulated, the cap was permanently
+ * saturated and <em>every</em> subsequent spawn in that world was refused, including in chunks
+ * thousands of blocks away from any Wither. A player who walked away from spawn would find no
+ * conversions and no boss bars anywhere.
+ *
+ * <p>The cap is a performance limit: its purpose is to bound the number of Withers the server
+ * has to tick, and only loaded Withers tick. Counting loaded entities therefore measures the
+ * thing the cap exists to protect, and it cannot drift. {@link #count(World)} is served from
+ * that live count.
+ *
+ * <p>Withers that are registered but not currently loaded are retained separately in
+ * {@link #unloaded} so {@link #total()} and the purge path can still reach them, but they do
+ * not consume cap.
  */
 public final class WitherIndex {
 
     private final MobWithersPlugin plugin;
     private final EntityKeys keys;
 
-    /** UUID -> world the Wither lives in. */
+    /** UUID -> world the Wither lives in, for every Wither this plugin has created. */
     private final Map<UUID, World> tracked = new ConcurrentHashMap<>();
 
-    /** Cached per-world counts so cap checks are O(1) rather than O(entities). */
-    private final Map<UUID, AtomicInteger> perWorldCounts = new ConcurrentHashMap<>();
+    /** Tracked Withers whose chunk is not loaded, so they cannot be counted as ticking. */
+    private final Map<UUID, World> unloaded = new ConcurrentHashMap<>();
+
+    /** Live (loaded) Wither counts per world, recomputed from the world by {@link #refresh}. */
+    private final Map<UUID, Integer> loadedCounts = new ConcurrentHashMap<>();
 
     public WitherIndex(MobWithersPlugin plugin, EntityKeys keys) {
         this.plugin = plugin;
@@ -39,24 +59,32 @@ public final class WitherIndex {
     /** Remembers a Wither this plugin spawned. */
     public void register(Wither wither) {
         World world = wither.getWorld();
-        World previous = tracked.put(wither.getUniqueId(), world);
-        if (previous == null) {
-            perWorldCounts.computeIfAbsent(world.getUID(), id -> new AtomicInteger()).incrementAndGet();
+        tracked.put(wither.getUniqueId(), world);
+        if (wither.isValid() && !wither.isDead()) {
+            unloaded.remove(wither.getUniqueId());
+            loadedCounts.compute(world.getUID(), (id, count) -> count == null ? 1 : count + 1);
+        } else {
+            unloaded.put(wither.getUniqueId(), world);
         }
     }
 
     /** Forgets a Wither, typically because it died. */
     public void unregister(Entity entity) {
         World world = tracked.remove(entity.getUniqueId());
-        if (world != null) {
-            AtomicInteger counter = perWorldCounts.get(world.getUID());
-            if (counter != null) {
-                counter.decrementAndGet();
-            }
+        if (world == null) {
+            return;
+        }
+        if (unloaded.remove(entity.getUniqueId()) == null) {
+            decrementLoaded(world);
         }
     }
 
-    /** True when this entity is a Wither created by the plugin. */
+    /**
+     * True when this entity is a Wither created by the plugin.
+     *
+     * <p>Reads the marker straight off the entity rather than the mirror, so it is correct for
+     * Withers that were loaded by a server restart or by chunk loading.
+     */
     public boolean isConverted(LivingEntity entity) {
         if (!(entity instanceof Wither) && entity.getType() != org.bukkit.entity.EntityType.WITHER) {
             return false;
@@ -67,23 +95,19 @@ public final class WitherIndex {
     }
 
     /**
-     * Number of tracked Withers in a world.
+     * Number of <em>loaded</em> tracked Withers in a world.
      *
-     * <p>The counter is authoritative for {@code track()}-ed entities. A world whose counter
-     * has drifted negative (for example after a crash) is clamped to zero.
+     * <p>This is the cap basis. Kept fresh by {@link #refresh()}; {@link #noteLoaded} and
+     * {@link #noteUnloaded} keep it exact between refreshes.
      */
     public int count(World world) {
-        AtomicInteger counter = perWorldCounts.get(world.getUID());
-        return counter == null ? 0 : Math.max(0, counter.get());
+        Integer count = loadedCounts.get(world.getUID());
+        return count == null ? 0 : Math.max(0, count);
     }
 
-    /** Total tracked Withers across every world. */
+    /** Total tracked Withers across every world, loaded or not. */
     public int total() {
-        int sum = 0;
-        for (AtomicInteger counter : perWorldCounts.values()) {
-            sum += Math.max(0, counter.get());
-        }
-        return sum;
+        return tracked.size();
     }
 
     /** Snapshot of the tracked UUIDs, used by the purge subcommand. */
@@ -91,35 +115,70 @@ public final class WitherIndex {
         return tracked.keySet();
     }
 
-    /** Rebuilds the mirror from the loaded worlds; called on enable and after a purge. */
+    /** Records that a tracked Wither entered the loaded area. */
+    public void noteLoaded(Wither wither) {
+        if (tracked.putIfAbsent(wither.getUniqueId(), wither.getWorld()) != null) {
+            return;
+        }
+        unloaded.remove(wither.getUniqueId());
+        loadedCounts.compute(wither.getWorld().getUID(), (id, count) -> count == null ? 1 : count + 1);
+    }
+
+    /** Records that a tracked Wither left the loaded area. */
+    public void noteUnloaded(Entity entity) {
+        World world = tracked.get(entity.getUniqueId());
+        if (world == null) {
+            return;
+        }
+        if (unloaded.putIfAbsent(entity.getUniqueId(), world) == null) {
+            decrementLoaded(world);
+        }
+    }
+
+    /** Recomputes the loaded counts from the worlds; called on enable and after a purge. */
     public void rebuild() {
         tracked.clear();
-        perWorldCounts.clear();
+        unloaded.clear();
+        loadedCounts.clear();
+        refresh();
+    }
+
+    /** Re-derives the loaded counts and tracked set from currently loaded entities. */
+    public void refresh() {
+        loadedCounts.clear();
+        unloaded.clear();
         for (World world : Bukkit.getWorlds()) {
+            int count = 0;
             for (Wither wither : world.getEntitiesByClass(Wither.class)) {
-                if (isConverted(wither)) {
-                    tracked.put(wither.getUniqueId(), world);
-                    perWorldCounts.computeIfAbsent(world.getUID(), id -> new AtomicInteger())
-                            .incrementAndGet();
+                if (!isConverted(wither)) {
+                    continue;
                 }
+                tracked.put(wither.getUniqueId(), world);
+                count++;
             }
+            loadedCounts.put(world.getUID(), count);
         }
     }
 
     /** Drops every tracked entry. */
     public void clear() {
         tracked.clear();
-        perWorldCounts.clear();
+        unloaded.clear();
+        loadedCounts.clear();
     }
 
     /** Removes a specific Wither from the mirror without affecting the entity. */
     public void forget(UUID id) {
         World world = tracked.remove(id);
-        if (world != null) {
-            AtomicInteger counter = perWorldCounts.get(world.getUID());
-            if (counter != null) {
-                counter.decrementAndGet();
-            }
+        if (world == null) {
+            return;
         }
+        if (unloaded.remove(id) == null) {
+            decrementLoaded(world);
+        }
+    }
+
+    private void decrementLoaded(World world) {
+        loadedCounts.computeIfPresent(world.getUID(), (id, count) -> count <= 1 ? 0 : count - 1);
     }
 }

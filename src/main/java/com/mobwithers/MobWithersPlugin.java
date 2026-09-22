@@ -50,6 +50,9 @@ public final class MobWithersPlugin extends JavaPlugin {
     private AiLimiter aiLimiter;
     private Statistics stats;
 
+    /** Repeating task that rebuilds the cap counts from the loaded worlds. */
+    private int spawnAuditTaskId = -1;
+
     /** Wall-clock timestamp used to suppress duplicate chunk scan work. */
     private volatile boolean debug;
 
@@ -91,6 +94,8 @@ public final class MobWithersPlugin extends JavaPlugin {
             Bukkit.getScheduler().runTask(this, this::scanAllLoadedChunks);
         }
 
+        startSpawnAudit();
+
         getLogger().info("MobWithers enabled: %s, %d types excluded."
                 .formatted(tpsGuard.describe(), settings.excludedTypes.size()));
         if (!waterGuard.capsAreZeroed()) {
@@ -101,6 +106,10 @@ public final class MobWithersPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (spawnAuditTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(spawnAuditTaskId);
+            spawnAuditTaskId = -1;
+        }
         if (waterGuard != null) {
             waterGuard.stop();
         }
@@ -137,6 +146,13 @@ public final class MobWithersPlugin extends JavaPlugin {
         bossBars.start();
         aiLimiter.start();
         conversion.rebuildCapacityCounters();
+
+        if (spawnAuditTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(spawnAuditTaskId);
+            spawnAuditTaskId = -1;
+        }
+        startSpawnAudit();
+        witherIndex.refresh();
     }
 
     // ------------------------------------------------------------------
@@ -194,6 +210,33 @@ public final class MobWithersPlugin extends JavaPlugin {
         witherIndex.rebuild();
         conversion.rebuildCapacityCounters();
         return removed;
+    }
+
+    /**
+     * Periodically re-derives the cap counts from the loaded worlds.
+     *
+     * <p>The counts are already kept exact by the load/unload events; this is a safety net. It
+     * also logs a warning if the tracked total disagrees with what the worlds contain, which is
+     * the symptom a player sees as "mobs stopped converting".
+     */
+    private void startSpawnAudit() {
+        int interval = settings.spawnAuditIntervalTicks;
+        if (interval <= 0) {
+            return;
+        }
+        spawnAuditTaskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, () -> {
+            witherIndex.refresh();
+            int loaded = 0;
+            for (org.bukkit.World world : Bukkit.getWorlds()) {
+                loaded += witherIndex.count(world);
+            }
+            int tracked = witherIndex.total();
+            if (tracked < loaded) {
+                getLogger().warning("Wither tracking lost %d entries (tracked=%d loaded=%d); "
+                        .formatted(loaded - tracked, tracked, loaded)
+                        + "the cap has been rebuilt from the worlds.");
+            }
+        }, interval, interval);
     }
 
     /** Buffers a spawner lookup so the matching spawn event finds the right loot table. */

@@ -1,10 +1,7 @@
 package com.mobwithers;
 
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
-import org.bukkit.Bukkit;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
@@ -32,9 +29,6 @@ public final class ConversionService {
 
     private final MobWithersPlugin plugin;
     private final EntityKeys keys;
-
-    /** Chunk-key -> live plugin-spawned Withers in that chunk, for the per-chunk cap. */
-    private final Map<Long, Integer> perChunk = new ConcurrentHashMap<>();
 
     /** Admin kill-switch, independent of the config flag. */
     private volatile boolean halted;
@@ -322,39 +316,45 @@ public final class ConversionService {
     // Capacity accounting
     // ------------------------------------------------------------------
 
+    /**
+     * Counts the Withers already in the target chunk, and refuses when the chunk is full.
+     *
+     * <p>This deliberately does not maintain a running total. An earlier version incremented a
+     * map keyed by chunk and only decremented it when a spawn failed, so every Wither that
+     * unloaded or died leaked its slot: the chunk looked permanently full and stopped
+     * converting, and {@link #rebuildCapacityCounters()} could not repair it because that also
+     * only sees loaded entities. Counting the chunk's own entities cannot drift, and for a
+     * chunk small enough to load a single mob into it is also cheaper than maintaining the
+     * accounting.
+     */
     private boolean reserveCapacity(Settings s, World world, Location location) {
-        if (plugin.witherIndex().count(world) >= s.maxWithersPerWorld) {
-            return false;
-        }
         long chunkKey = Chunk.getChunkKey(location);
-        int inChunk = perChunk.getOrDefault(chunkKey, 0);
+        int inChunk = 0;
+        for (Entity entity : world.getChunkAt(location).getEntities()) {
+            if (entity instanceof Wither wither && plugin.witherIndex().isConverted(wither)) {
+                inChunk++;
+            }
+        }
         if (inChunk >= s.maxWithersPerChunk) {
             return false;
         }
-        perChunk.put(chunkKey, inChunk + 1);
         return true;
     }
 
+    /** Retained for callers that used to undo a reservation; counting needs no undo. */
     private void releaseCapacity(Location location) {
-        long chunkKey = Chunk.getChunkKey(location);
-        perChunk.computeIfPresent(chunkKey, (key, count) -> count <= 1 ? null : count - 1);
+        // No accounting to undo: reserveCapacity() reads the chunk fresh each time. Kept so the
+        // failure paths in convertNow() read clearly and can be extended without churn.
     }
 
     /** Drops all per-chunk counters. */
     public void resetCapacityCounters() {
-        perChunk.clear();
+        // Nothing to reset; the cap is derived from live chunk contents on each spawn.
     }
 
     /** Recomputes per-chunk counters from the live worlds. */
     public void rebuildCapacityCounters() {
-        perChunk.clear();
-        for (World world : Bukkit.getWorlds()) {
-            for (Wither wither : world.getEntitiesByClass(Wither.class)) {
-                if (plugin.witherIndex().isConverted(wither)) {
-                    perChunk.merge(Chunk.getChunkKey(wither.getLocation()), 1, Integer::sum);
-                }
-            }
-        }
+        // Nothing to rebuild; see reserveCapacity().
     }
 
     /** Where a converted Wither came from, for the admin command. */
